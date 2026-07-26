@@ -229,6 +229,82 @@ func TestLoadArtifactsTool_ProcessRequest_Artifacts_LoadArtifactsFunctionCall(t 
 	}
 }
 
+// TestLoadArtifactsTool_ProcessRequest_MIMEHandling guards that loaded
+// artifacts with inline MIME types Gemini does not accept inline are converted
+// to model-safe parts instead of being forwarded as-is (which fails the next
+// generateContent call with "Unsupported MIME Type"). Supported media passes
+// through, text-like data is decoded to text, and other binary data becomes a
+// descriptive placeholder.
+func TestLoadArtifactsTool_ProcessRequest_MIMEHandling(t *testing.T) {
+	tests := []struct {
+		name       string
+		artifact   *genai.Part
+		wantInline bool   // expect the original inline part passed through unchanged
+		wantText   string // otherwise expect a text part equal to this
+	}{
+		{
+			name:       "supported image passes through inline",
+			artifact:   &genai.Part{InlineData: &genai.Blob{MIMEType: "image/png", Data: []byte{0x89, 'P', 'N', 'G'}}},
+			wantInline: true,
+		},
+		{
+			name:     "csv inline data is decoded to text",
+			artifact: &genai.Part{InlineData: &genai.Blob{MIMEType: "application/csv", Data: []byte("a,b\n1,2")}},
+			wantText: "a,b\n1,2",
+		},
+		{
+			name:     "unsupported binary becomes a placeholder",
+			artifact: &genai.Part{InlineData: &genai.Blob{MIMEType: "application/vnd.ms-excel", Data: []byte{0x00, 0x01, 0x02, 0x03}}},
+			wantText: `[Artifact "data" could not be inlined: unsupported MIME type "application/vnd.ms-excel" (4 bytes).]`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			loadArtifactsTool := loadartifactstool.New()
+			tc := createToolContext(t)
+			const name = "data"
+			if _, err := tc.Artifacts().Save(t.Context(), name, tt.artifact); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+
+			req := &model.LLMRequest{
+				Contents: []*genai.Content{{
+					Role: "model",
+					Parts: []*genai.Part{
+						genai.NewPartFromFunctionResponse("load_artifacts", map[string]any{"artifact_names": []string{name}}),
+					},
+				}},
+			}
+			rp, ok := loadArtifactsTool.(toolinternal.RequestProcessor)
+			if !ok {
+				t.Fatal("loadArtifactsTool does not implement RequestProcessor")
+			}
+			if err := rp.ProcessRequest(tc, req); err != nil {
+				t.Fatalf("ProcessRequest: %v", err)
+			}
+
+			if len(req.Contents) != 2 || len(req.Contents[1].Parts) != 2 {
+				t.Fatalf("unexpected appended contents: %+v", req.Contents)
+			}
+			got := req.Contents[1].Parts[1]
+
+			if tt.wantInline {
+				if got.InlineData == nil || got.InlineData.MIMEType != tt.artifact.InlineData.MIMEType {
+					t.Errorf("expected supported inline part to pass through, got %+v", got)
+				}
+				return
+			}
+			if got.InlineData != nil {
+				t.Errorf("expected inline data to be converted away, but part is still inline: %+v", got.InlineData)
+			}
+			if got.Text != tt.wantText {
+				t.Errorf("converted text = %q, want %q", got.Text, tt.wantText)
+			}
+		})
+	}
+}
+
 func TestLoadArtifactsTool_ProcessRequest_Artifacts_OtherFunctionCall(t *testing.T) {
 	loadArtifactsTool := loadartifactstool.New()
 

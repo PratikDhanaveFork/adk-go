@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/genai"
@@ -213,8 +214,68 @@ func (t *artifactsTool) loadIndividualArtifact(ctx context.Context, artifactsSer
 	return &genai.Content{
 		Parts: []*genai.Part{
 			genai.NewPartFromText("Artifact " + artifactName + " is:"),
-			resp.Part,
+			modelSafeArtifactPart(artifactName, resp.Part),
 		},
 		Role: genai.RoleUser,
 	}, nil
+}
+
+// modelSafeArtifactPart converts a loaded artifact part into one the model can
+// accept. Gemini only accepts a limited set of MIME types as inline data, so an
+// unsupported inline part would fail the whole follow-up generateContent call.
+// Supported inline media is passed through unchanged; text-like inline data is
+// decoded to a text part so the model still sees the content; any other
+// unsupported binary inline data is replaced with a short placeholder naming the
+// artifact, MIME type, and size. Non-inline parts (text, file_data URIs) are
+// left untouched.
+func modelSafeArtifactPart(name string, part *genai.Part) *genai.Part {
+	if part == nil || part.InlineData == nil {
+		return part
+	}
+	mimeType := part.InlineData.MIMEType
+	switch {
+	case isInlineSupportedMIME(mimeType):
+		return part
+	case isTextLikeMIME(mimeType):
+		return genai.NewPartFromText(string(part.InlineData.Data))
+	default:
+		return genai.NewPartFromText(fmt.Sprintf(
+			"[Artifact %q could not be inlined: unsupported MIME type %q (%d bytes).]",
+			name, mimeType, len(part.InlineData.Data)))
+	}
+}
+
+// baseMIME lower-cases a MIME type and strips any parameters (e.g. "; charset=utf-8").
+func baseMIME(mimeType string) string {
+	m := strings.ToLower(strings.TrimSpace(mimeType))
+	if i := strings.IndexByte(m, ';'); i >= 0 {
+		m = strings.TrimSpace(m[:i])
+	}
+	return m
+}
+
+// isInlineSupportedMIME reports whether Gemini accepts the MIME type as inline data.
+func isInlineSupportedMIME(mimeType string) bool {
+	m := baseMIME(mimeType)
+	if m == "application/pdf" {
+		return true
+	}
+	switch prefix, _, _ := strings.Cut(m, "/"); prefix {
+	case "image", "audio", "video":
+		return true
+	}
+	return false
+}
+
+// isTextLikeMIME reports whether the inline data can be safely presented as text.
+func isTextLikeMIME(mimeType string) bool {
+	m := baseMIME(mimeType)
+	if strings.HasPrefix(m, "text/") {
+		return true
+	}
+	switch m {
+	case "application/csv", "application/json", "application/xml":
+		return true
+	}
+	return false
 }
