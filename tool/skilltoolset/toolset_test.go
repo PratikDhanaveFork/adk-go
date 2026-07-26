@@ -81,6 +81,34 @@ func TestProcessRequest(t *testing.T) {
 	}
 }
 
+// TestProcessRequest_LoadSkillInstructionUsesSchemaParamName guards that the
+// default system instruction documents the load_skill tool with the parameter
+// name its schema actually expects (`name`), not `skill_name`. The load_skill
+// args struct (LoadSkillArgs.Name, json:"name") only accepts `name`, so an
+// instruction telling the model to pass `skill_name` is rejected by ADK's
+// input-schema validator on every first load (#912).
+func TestProcessRequest_LoadSkillInstructionUsesSchemaParamName(t *testing.T) {
+	source := &mockSource{
+		frontmatters: []*skill.Frontmatter{{Name: "skill0", Description: "d"}},
+	}
+	ts, err := skilltoolset.New(t.Context(), skilltoolset.Config{Source: source})
+	if err != nil {
+		t.Fatalf("skilltoolset.New failed: %v", err)
+	}
+	req := &model.LLMRequest{}
+	if err := ts.ProcessRequest(nil, req); err != nil {
+		t.Fatalf("ProcessRequest failed: %v", err)
+	}
+	instr := req.Config.SystemInstruction.Parts[0].Text
+
+	if !strings.Contains(instr, "`load_skill` tool with `name=\"<SKILL_NAME>\"`") {
+		t.Errorf("default instruction should document load_skill with name=, got:\n%s", instr)
+	}
+	if strings.Contains(instr, "`load_skill` tool with `skill_name=") {
+		t.Errorf("default instruction still documents load_skill with skill_name=, which its schema rejects:\n%s", instr)
+	}
+}
+
 func TestProcessRequest_NoSkills(t *testing.T) {
 	ts, err := skilltoolset.New(t.Context(), skilltoolset.Config{Source: &mockSource{}})
 	if err != nil {
