@@ -62,10 +62,19 @@ func (t *SingleTurnTool) Run(toolCtx agent.Context, args any) (map[string]any, e
 
 	var nodeInput any
 
-	if t.funcDeclaration.Parameters != nil {
-		if err := utils.ValidateMapOnSchema(margs, t.funcDeclaration.Parameters, true); err != nil {
-			return nil, fmt.Errorf("argument validation failed for agent %s: %w", t.agent.Name(), err)
-		}
+	// funcDeclaration.Parameters is always set by MakeFunctionDeclaration (a
+	// synthesized {request: STRING} schema when the agent has none), so always
+	// validate the args against it.
+	if err := utils.ValidateMapOnSchema(margs, t.funcDeclaration.Parameters, true); err != nil {
+		return nil, fmt.Errorf("argument validation failed for agent %s: %w", t.agent.Name(), err)
+	}
+
+	// Only the agent's own schema takes the full argument map. When the agent has
+	// no input schema (the synthesized {request} fallback), pass the request
+	// string through — otherwise the wrapped agent receives the literal
+	// {"request": ...} map instead of the request text. Gating on Parameters !=
+	// nil (always true) left this `else` branch dead.
+	if getInputSchema(t.agent) != nil {
 		nodeInput = margs
 	} else {
 		nodeInput = margs["request"]
