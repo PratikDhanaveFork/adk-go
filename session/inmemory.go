@@ -78,10 +78,13 @@ func (s *inMemoryService) Create(ctx context.Context, req *CreateRequest) (*Crea
 	}
 
 	s.sessions.Set(encodedKey, val)
-	appDelta, userDelta, _ := sessionutils.ExtractStateDeltas(req.State)
+	appDelta, userDelta, sessionDelta := sessionutils.ExtractStateDeltas(req.State)
 	appState := s.updateAppState(appDelta, req.AppName)
 	userState := s.updateUserState(userDelta, req.AppName, req.UserID)
-	val.state = sessionutils.MergeStates(appState, userState, state)
+	// Use the extracted session delta (app:/user:/temp: prefixed keys removed),
+	// not the raw req.State, so temp: keys are not persisted and app:/user:
+	// keys are not duplicated. This matches the database backend.
+	val.state = sessionutils.MergeStates(appState, userState, sessionDelta)
 
 	copiedSession := copySessionWithoutStateAndEvents(val)
 	copiedSession.state = maps.Clone(val.state)
