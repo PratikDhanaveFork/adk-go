@@ -114,9 +114,14 @@ func (s *inMemoryService) SearchMemory(ctx context.Context, req *SearchRequest) 
 		userID:  req.UserID,
 	}
 
+	// Hold the read lock across the whole search: `values` is the inner
+	// map[sessionID][]value stored at s.store[k], which AddSessionToMemory
+	// mutates (v[sid] = ...) under the write lock. Iterating it after
+	// releasing the lock races that write -> "concurrent map iteration and
+	// map write" fatal crash. The loop only reads, so holding RLock is safe.
 	s.mu.RLock()
+	defer s.mu.RUnlock()
 	values, ok := s.store[k]
-	s.mu.RUnlock()
 	if !ok {
 		return &SearchResponse{}, nil
 	}
