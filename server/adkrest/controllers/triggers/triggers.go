@@ -86,8 +86,11 @@ func (r *RetriableRunner) RunAgent(ctx context.Context, appName, userID, message
 // After MaxRetries is exhausted, raises an error to signal the upstream service (Pub/Sub, Eventarc) to retry at a higher level.
 func (r *RetriableRunner) runAgentWithRetry(ctx context.Context, runR *runner.Runner, userID, sessionID string, userMessage *genai.Content) ([]*session.Event, error) {
 	var runErr error
-	events := []*session.Event{}
 	for i := 0; i <= r.triggerConfig.MaxRetries; i++ {
+		// Reset per attempt: otherwise a retry that succeeds after a failed
+		// attempt returns the failed attempt's events concatenated with the new
+		// ones.
+		events := []*session.Event{}
 		resp := runR.Run(ctx, userID, sessionID, userMessage, agent.RunConfig{StreamingMode: agent.StreamingModeNone})
 
 		isThrottled := false
