@@ -68,7 +68,8 @@ func NewPubSubControllerWithConfig(cfg ControllerConfig) (*PubSubController, err
 		return nil, err
 	}
 	return &PubSubController{
-		runner: retriable,
+		runner:    retriable,
+		semaphore: make(chan struct{}, cfg.TriggerConfig.MaxConcurrentRuns),
 	}, nil
 }
 
